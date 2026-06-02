@@ -8,17 +8,6 @@ complicated than it might seem, is that representing filepaths as text means we
 need to consider many possible edge cases of unrepresentable filepaths. This
 document describes all of these edge cases in detail.
 
-> [!CAUTION]
-> `b3sum --check` (like all the Coreutils `--check` features) tells you whether
-> some _filepaths_ have changed, but it can't tell you whether a _directory_
-> has changed in general. If you create a checkfile with something like `b3sum
-> my_dir/* > CHECKFILE`, then `b3sum --check CHECKFILE` will succeed even after
-> _new files_ are added to `my_dir`. Adding new files without changing anything
-> else is often enough to execute arbitrary code, for example by shadowing an
-> `import` in Python, or by installing something in `.git/hooks`. This is
-> confusing enough that I don't recommend using `--check` as a security tool in
-> new code.
-
 ## The simple case
 
 Here's the result of running `b3sum a b c/d` in a directory that contains
@@ -85,11 +74,9 @@ Notice two things. First, `b3sum` puts a single `\` character at the front of
 the line. This indicates that the filepath contains escape sequences that
 `b3sum --check` will need to unescape. Then, `b3sum` replaces the newline
 character in the filepath with the two-character escape sequence `\n`.
-Similarly, if the filepath contained carriage returns or backslashes, `b3sum`
-would escape those as `\r` and `\\` in the output. So far, all of this behavior
-is still identical to `md5sum`. (Note: Coreutils [introduced `\r`
-escaping](https://github.com/coreutils/coreutils/commit/ed1c58427d574fb4ff0cb8f915eb0d554000ceeb)
-in v9.0, September 2021.)
+Similarly, if the filepath contained a backslash, `b3sum` would escape it as
+`\\` in the output. So far, all of this behavior is still identical to
+`md5sum`.
 
 ## Invalid Unicode
 

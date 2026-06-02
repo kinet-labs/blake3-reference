@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure};
+use anyhow::{bail, ensure, Result};
 use clap::Parser;
 use std::cmp;
 use std::fs::File;
@@ -16,7 +16,6 @@ const KEYED_ARG: &str = "keyed";
 const LENGTH_ARG: &str = "length";
 const NO_NAMES_ARG: &str = "no_names";
 const RAW_ARG: &str = "raw";
-const TAG_ARG: &str = "tag";
 const CHECK_ARG: &str = "check";
 
 #[derive(Parser)]
@@ -73,10 +72,6 @@ struct Inner {
     #[arg(long)]
     raw: bool,
 
-    /// Output BSD-style checksums: BLAKE3 ([FILE]) = [HASH]
-    #[arg(long)]
-    tag: bool,
-
     /// Read BLAKE3 sums from the [FILE]s and check them
     #[arg(
         short,
@@ -85,7 +80,6 @@ struct Inner {
         conflicts_with(KEYED_ARG),
         conflicts_with(LENGTH_ARG),
         conflicts_with(RAW_ARG),
-        conflicts_with(TAG_ARG),
         conflicts_with(NO_NAMES_ARG)
     )]
     check: bool,
@@ -104,7 +98,7 @@ struct Args {
 }
 
 impl Args {
-    fn parse() -> anyhow::Result<Self> {
+    fn parse() -> Result<Self> {
         // wild::args_os() is equivalent to std::env::args_os() on Unix,
         // but on Windows it adds support for globbing.
         let inner = Inner::parse_from(wild::args_os());
@@ -144,10 +138,6 @@ impl Args {
         self.inner.raw
     }
 
-    fn tag(&self) -> bool {
-        self.inner.tag
-    }
-
     fn no_mmap(&self) -> bool {
         self.inner.no_mmap
     }
@@ -173,7 +163,7 @@ impl Args {
     }
 }
 
-fn hash_path(args: &Args, path: &Path) -> anyhow::Result<blake3::OutputReader> {
+fn hash_path(args: &Args, path: &Path) -> Result<blake3::OutputReader> {
     let mut hasher = args.base_hasher.clone();
     if path == Path::new("-") {
         if args.keyed() {
@@ -191,12 +181,12 @@ fn hash_path(args: &Args, path: &Path) -> anyhow::Result<blake3::OutputReader> {
     Ok(output_reader)
 }
 
-fn write_hex_output(mut output: blake3::OutputReader, args: &Args) -> anyhow::Result<()> {
+fn write_hex_output(mut output: blake3::OutputReader, args: &Args) -> Result<()> {
     // Encoding multiples of the 64 bytes is most efficient.
     // TODO: This computes each output block twice when the --seek argument isn't a multiple of 64.
     // We'll refactor all of this soon anyway, once SIMD optimizations are available for the XOF.
     let mut len = args.len();
-    let mut block = [0; blake3::BLOCK_LEN];
+    let mut block = [0; blake3::guts::BLOCK_LEN];
     while len > 0 {
         output.fill(&mut block);
         let hex_str = hex::encode(&block[..]);
@@ -207,7 +197,7 @@ fn write_hex_output(mut output: blake3::OutputReader, args: &Args) -> anyhow::Re
     Ok(())
 }
 
-fn write_raw_output(output: blake3::OutputReader, args: &Args) -> anyhow::Result<()> {
+fn write_raw_output(output: blake3::OutputReader, args: &Args) -> Result<()> {
     let mut output = output.take(args.len());
     let stdout = std::io::stdout();
     let mut handler = stdout.lock();
@@ -216,7 +206,7 @@ fn write_raw_output(output: blake3::OutputReader, args: &Args) -> anyhow::Result
     Ok(())
 }
 
-fn read_key_from_stdin() -> anyhow::Result<[u8; blake3::KEY_LEN]> {
+fn read_key_from_stdin() -> Result<[u8; blake3::KEY_LEN]> {
     let mut bytes = Vec::with_capacity(blake3::KEY_LEN + 1);
     let n = std::io::stdin()
         .lock()
@@ -254,11 +244,8 @@ fn filepath_to_string(filepath: &Path) -> FilepathString {
         filepath_string = filepath_string.replace('\\', "/");
     }
     let mut is_escaped = false;
-    if filepath_string.contains(['\\', '\n', '\r']) {
-        filepath_string = filepath_string
-            .replace('\\', "\\\\")
-            .replace('\n', "\\n")
-            .replace('\r', "\\r");
+    if filepath_string.contains('\\') || filepath_string.contains('\n') {
+        filepath_string = filepath_string.replace('\\', "\\\\").replace('\n', "\\n");
         is_escaped = true;
     }
     FilepathString {
@@ -267,7 +254,7 @@ fn filepath_to_string(filepath: &Path) -> FilepathString {
     }
 }
 
-fn hex_half_byte(c: char) -> anyhow::Result<u8> {
+fn hex_half_byte(c: char) -> Result<u8> {
     // The hex characters in the hash must be lowercase for now, though we
     // could support uppercase too if we wanted to.
     if '0' <= c && c <= '9' {
@@ -284,7 +271,7 @@ fn hex_half_byte(c: char) -> anyhow::Result<u8> {
 // to ever succeed when it shouldn't (a false positive). By forbidding certain
 // characters in checked filepaths, we avoid a class of false positives where
 // two different filepaths can get confused with each other.
-fn check_for_invalid_characters(utf8_path: &str) -> anyhow::Result<()> {
+fn check_for_invalid_characters(utf8_path: &str) -> Result<()> {
     // Null characters in paths should never happen, but they can result in a
     // path getting silently truncated on Unix.
     if utf8_path.contains('\0') {
@@ -308,7 +295,7 @@ fn check_for_invalid_characters(utf8_path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn unescape(mut path: &str) -> anyhow::Result<String> {
+fn unescape(mut path: &str) -> Result<String> {
     let mut unescaped = String::with_capacity(2 * path.len());
     while let Some(i) = path.find('\\') {
         ensure!(i < path.len() - 1, "Invalid backslash escape");
@@ -316,7 +303,6 @@ fn unescape(mut path: &str) -> anyhow::Result<String> {
         match path[i + 1..].chars().next().unwrap() {
             // Anything other than a recognized escape sequence is an error.
             'n' => unescaped.push_str("\n"),
-            'r' => unescaped.push_str("\r"),
             '\\' => unescaped.push_str("\\"),
             _ => bail!("Invalid backslash escape"),
         }
@@ -334,83 +320,60 @@ struct ParsedCheckLine {
     expected_hash: blake3::Hash,
 }
 
-fn split_untagged_check_line(line_after_slash: &str) -> Option<(&str, &str)> {
-    // Of the form "<hash>  <file>". The file might contain "  ", so we need to split from the
-    // left.
-    line_after_slash.split_once("  ")
-}
-
-fn split_tagged_check_line(line_after_slash: &str) -> Option<(&str, &str)> {
-    // Of the form "BLAKE3 (<file>) = <hash>". The file might contain ") = ", so we need to split
-    // from the *right*.
-    let prefix = "BLAKE3 (";
-    if !line_after_slash.starts_with(prefix) {
-        return None;
-    }
-    line_after_slash[prefix.len()..].rsplit_once(") = ")
-}
-
-fn parse_check_line(mut line: &str) -> anyhow::Result<ParsedCheckLine> {
-    // Trim off the trailing newlines, if any.
-    line = line.trim_end_matches(['\r', '\n']);
+fn parse_check_line(mut line: &str) -> Result<ParsedCheckLine> {
+    // Trim off the trailing newline, if any.
+    line = line.trim_end_matches('\n');
     // If there's a backslash at the front of the line, that means we need to
     // unescape the path below. This matches the behavior of e.g. md5sum.
-    let Some(first) = line.chars().next() else {
+    let first = if let Some(c) = line.chars().next() {
+        c
+    } else {
         bail!("Empty line");
     };
-    let line_after_slash;
-    let is_escaped;
+    let mut is_escaped = false;
     if first == '\\' {
         is_escaped = true;
-        line_after_slash = &line[1..];
-    } else {
-        is_escaped = false;
-        line_after_slash = line;
+        line = &line[1..];
     }
-
-    // Split the line. It might be "<hash>  <file>" or "BLAKE3 (<file>) = <hash>". The latter comes
-    // from the --tag flag.
-    let hash_hex;
-    let file_str;
-    if let Some((left, right)) = split_untagged_check_line(line_after_slash) {
-        hash_hex = left;
-        file_str = right;
-    } else if let Some((left, right)) = split_tagged_check_line(line_after_slash) {
-        file_str = left;
-        hash_hex = right;
-    } else {
-        bail!("Invalid check line format");
-    }
-
-    // Decode the hex hash.
-    ensure!(hash_hex.len() == 2 * blake3::OUT_LEN, "Invalid hash length");
-    let mut hex_chars = hash_hex.chars();
+    // The front of the line must be a hash of the usual length, followed by
+    // two spaces. The hex characters in the hash must be lowercase for now,
+    // though we could support uppercase too if we wanted to.
+    let hash_hex_len = 2 * blake3::OUT_LEN;
+    let num_spaces = 2;
+    let prefix_len = hash_hex_len + num_spaces;
+    ensure!(line.len() > prefix_len, "Short line");
+    ensure!(
+        line.chars().take(prefix_len).all(|c| c.is_ascii()),
+        "Non-ASCII prefix"
+    );
+    ensure!(&line[hash_hex_len..][..2] == "  ", "Invalid space");
+    // Decode the hash hex.
     let mut hash_bytes = [0; blake3::OUT_LEN];
+    let mut hex_chars = line[..hash_hex_len].chars();
     for byte in &mut hash_bytes {
         let high_char = hex_chars.next().unwrap();
         let low_char = hex_chars.next().unwrap();
         *byte = 16 * hex_half_byte(high_char)? + hex_half_byte(low_char)?;
     }
     let expected_hash: blake3::Hash = hash_bytes.into();
-
-    // Unescape and validate the filepath.
+    let file_string = line[prefix_len..].to_string();
     let file_path_string = if is_escaped {
-        unescape(file_str)?
+        // If we detected a backslash at the start of the line earlier, now we
+        // need to unescape backslashes and newlines.
+        unescape(&file_string)?
     } else {
-        file_str.to_string()
+        file_string.clone().into()
     };
-    ensure!(!file_path_string.is_empty(), "empty file path");
     check_for_invalid_characters(&file_path_string)?;
-
     Ok(ParsedCheckLine {
-        file_string: file_str.to_string(),
+        file_string,
         is_escaped,
         file_path: file_path_string.into(),
         expected_hash,
     })
 }
 
-fn hash_one_input(path: &Path, args: &Args) -> anyhow::Result<()> {
+fn hash_one_input(path: &Path, args: &Args) -> Result<()> {
     let output = hash_path(args, path)?;
     if args.raw() {
         write_raw_output(output, args)?;
@@ -427,12 +390,6 @@ fn hash_one_input(path: &Path, args: &Args) -> anyhow::Result<()> {
     } = filepath_to_string(path);
     if is_escaped {
         print!("\\");
-    }
-    if args.tag() {
-        print!("BLAKE3 ({}) = ", filepath_string);
-        write_hex_output(output, args)?;
-        println!();
-        return Ok(());
     }
     write_hex_output(output, args)?;
     println!("  {}", filepath_string);
@@ -485,7 +442,7 @@ fn check_one_line(line: &str, args: &Args) -> bool {
     }
 }
 
-fn check_one_checkfile(path: &Path, args: &Args, files_failed: &mut u64) -> anyhow::Result<()> {
+fn check_one_checkfile(path: &Path, args: &Args, files_failed: &mut u64) -> Result<()> {
     let mut file;
     let stdin;
     let mut stdin_lock;
@@ -516,9 +473,9 @@ fn check_one_checkfile(path: &Path, args: &Args, files_failed: &mut u64) -> anyh
     }
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<()> {
     let args = Args::parse()?;
-    let mut thread_pool_builder = rayon_core::ThreadPoolBuilder::new();
+    let mut thread_pool_builder = rayon::ThreadPoolBuilder::new();
     if let Some(num_threads) = args.num_threads() {
         thread_pool_builder = thread_pool_builder.num_threads(num_threads);
     }

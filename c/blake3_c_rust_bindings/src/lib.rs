@@ -3,7 +3,7 @@
 //! repo, these bindings are not expected to be used in production. They're
 //! intended for testing and benchmarking.
 
-use std::ffi::{CString, c_void};
+use std::ffi::{c_void, CString};
 use std::mem::MaybeUninit;
 
 #[cfg(test)]
@@ -82,17 +82,6 @@ impl Hasher {
         }
     }
 
-    #[cfg(feature = "tbb")]
-    pub fn update_tbb(&mut self, input: &[u8]) {
-        unsafe {
-            ffi::blake3_hasher_update_tbb(
-                &mut self.0,
-                input.as_ptr() as *const c_void,
-                input.len(),
-            );
-        }
-    }
-
     pub fn finalize(&self, output: &mut [u8]) {
         unsafe {
             ffi::blake3_hasher_finalize(&self.0, output.as_mut_ptr(), output.len());
@@ -130,10 +119,10 @@ pub mod ffi {
         pub key: [u32; 8usize],
         pub chunk: blake3_chunk_state,
         pub cv_stack_len: u8,
-        pub cv_stack: [u8; 1760usize],
+        pub cv_stack: [u8; 1728usize],
     }
 
-    unsafe extern "C" {
+    extern "C" {
         // public interface
         pub fn blake3_hasher_init(self_: *mut blake3_hasher);
         pub fn blake3_hasher_init_keyed(self_: *mut blake3_hasher, key: *const u8);
@@ -147,12 +136,6 @@ pub mod ffi {
             context_len: usize,
         );
         pub fn blake3_hasher_update(
-            self_: *mut blake3_hasher,
-            input: *const ::std::os::raw::c_void,
-            input_len: usize,
-        );
-        #[cfg(feature = "tbb")]
-        pub fn blake3_hasher_update_tbb(
             self_: *mut blake3_hasher,
             input: *const ::std::os::raw::c_void,
             input_len: usize,
@@ -198,7 +181,7 @@ pub mod ffi {
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub mod x86 {
-        unsafe extern "C" {
+        extern "C" {
             // SSE2 low level functions
             pub fn blake3_compress_in_place_sse2(
                 cv: *mut u32,
@@ -299,22 +282,12 @@ pub mod ffi {
                 flags_end: u8,
                 out: *mut u8,
             );
-            #[cfg(unix)]
-            pub fn blake3_xof_many_avx512(
-                cv: *const u32,
-                block: *const u8,
-                block_len: u8,
-                counter: u64,
-                flags: u8,
-                out: *mut u8,
-                outblocks: usize,
-            );
         }
     }
 
     #[cfg(feature = "neon")]
     pub mod neon {
-        unsafe extern "C" {
+        extern "C" {
             // NEON low level functions
             pub fn blake3_hash_many_neon(
                 inputs: *const *const u8,

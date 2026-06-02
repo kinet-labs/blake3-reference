@@ -7,7 +7,7 @@
 name = "blake3_c_rust_bindings"
 version = "0.0.0"
 description = "TESTING ONLY Rust bindings for the BLAKE3 C implementation"
-edition = "2021"
+edition = "2024"
 
 [features]
 # By default the x86-64 build uses assembly implementations. This feature makes
@@ -16,14 +16,17 @@ prefer_intrinsics = []
 # Activate NEON bindings. We don't currently do any CPU feature detection for
 # this. If this Cargo feature is on, the NEON gets used.
 neon = []
+# Enable TBB-based multithreading.
+tbb = []
 
 [dev-dependencies]
 arrayref = "0.3.5"
 arrayvec = { version = "0.7.0", default-features = false }
 page_size = "0.6.0"
-rand = "0.8.5"
-rand_chacha = "0.3.1"
+rand = "0.10.0"
+chacha20 = "0.10.0"
 reference_impl = { path = "../../reference_impl" }
 
 [build-dependencies]
 cc = "1.0.48"
+ignore = "0.4.23"
